@@ -1,5 +1,5 @@
 package com.astro.hyperlapse
-
+import android.R as AndroidR
 import android.app.*
 import android.content.Context
 import android.content.Intent
@@ -87,7 +87,7 @@ class AstroCameraService : Service() {
         val notif = NotificationCompat.Builder(this, chanId)
             .setContentTitle("AstroHyperLapse Ultra")
             .setContentText("Ночная съемка звезд активна...")
-            .setSmallIcon(R.drawable.ic_astro_launcher)
+            .setSmallIcon(android.R.drawable.ic_menu_camera)
             .build()
         startForeground(101, notif)
     }
