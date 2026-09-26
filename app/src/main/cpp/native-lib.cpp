@@ -52,7 +52,7 @@ void applyAstroGrading(Mat& bgrFrame, float starGain, int blackCut, int maskStre
                 // Отсекаем темновой шум (на коврике в темноте здесь станет ровно 0!)
                 float clean = std::max(0.0f, val - totalBlackCut);
                 // Мягкое нелинейное вытягивание звезд без пересвета фона
-                floatnorm = clean / (255.0f - totalBlackCut + 1.0f);
+                float floatnorm = clean / (255.0f - totalBlackCut + 1.0f);
                 float boosted = std::pow(floatnorm, 0.88f) * 255.0f * gainFactor;
                 // Применяем плавный градиент подавления фонаря соседа
                 float finalVal = boosted * rowAttenuation;
