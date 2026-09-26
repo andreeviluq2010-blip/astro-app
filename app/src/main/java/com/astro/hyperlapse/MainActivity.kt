@@ -1,20 +1,59 @@
 package com.astro.hyperlapse
 
 import android.Manifest
-import android.content.*
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.graphics.*
-import android.hardware.*
-import android.hardware.camera2.*
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.ImageFormat
+import android.graphics.Paint
+import android.graphics.Rect
+import android.graphics.SurfaceTexture
+import android.graphics.Typeface
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.hardware.camera2.CameraCaptureSession
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraDevice
+import android.hardware.camera2.CameraManager
+import android.hardware.camera2.CameraMetadata
+import android.hardware.camera2.CaptureRequest
 import android.media.ImageReader
-import android.os.*
-import android.view.*
-import android.widget.*
+import android.os.BatteryManager
+import android.os.Build
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.view.Gravity
+import android.view.Surface
+import android.view.TextureView
+import android.view.View
+import android.view.WindowManager
+import android.widget.Button
+import android.widget.FrameLayout
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.SeekBar
+import android.widget.TextView
+import android.widget.Toast
+import android.widget.ViewFlipper
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import java.util.Locale
-import kotlin.math.*
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.max
+import kotlin.math.pow
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 class MainActivity : AppCompatActivity(), SensorEventListener {
 
@@ -23,9 +62,13 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
     // Экран 1: Датчики
     private lateinit var tvSensorsInfo: TextView
-    private var gyroX = 0f; private var gyroY = 0f; private var gyroZ = 0f
-    private var pitchDeg = 0f; private var rollDeg = 0f
-    private var batteryTemp = 0f; private var batteryPct = 0
+    private var gyroX = 0f
+    private var gyroY = 0f
+    private var gyroZ = 0f
+    private var pitchDeg = 0f
+    private var rollDeg = 0f
+    private var batteryTemp = 0f
+    private var batteryPct = 0
 
     // Экран 2: Видоискатель + Лупа 10x + Пробное фото
     private lateinit var textureView: TextureView
@@ -38,7 +81,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private var isLoupe10x = false
     private var maskHorizonPercent = 50
     private var starGainValue = 35f
-    private var blackCutValue = 22 // Порог отсечения темнового шума матрицы
+    private var blackCutValue = 22
 
     // Диалог живой докрутки пробного фото
     private var rawTestBitmap: Bitmap? = null
@@ -52,12 +95,10 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private var settingWindowSize = 16
     private var settingDlss = 4
     private var settingBitrate = 100
-    private var settingScreenOffMin = 10
     private var settingLissajousPx = 6
 
     // Экран 4: Ночной полет (Защита AMOLED)
     private lateinit var tvAmoledStatus: TextView
-    private var screenStartTimeMs = 0L
     private val uiHandler = Handler(Looper.getMainLooper())
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -126,7 +167,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         return ScrollView(this).apply { addView(layout) }
     }
 
-    // ================= ЭКРАН 2: ВИДОИСКАТЕЛЬ + ПРОБНОЕ ФОТО + КНОПКА ПРОПУСТИТЬ =================
+    // ================= ЭКРАН 2: ВИДОИСКАТЕЛЬ + КНОПКА ПРОПУСТИТЬ =================
     private fun buildScreen2Viewfinder(): View {
         val mainBox = FrameLayout(this)
 
@@ -153,7 +194,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             setTextColor(Color.WHITE)
             setOnClickListener {
                 isLoupe10x = !isLoupe10x
-                text = if (isLoupe10x) "🔍 ЛУПА 10x ДЛЯ ФОКУСА: ВКЛ (НАВЕДИ НА ЗВЕЗДУ)" else "🔍 ЛУПА 10x ДЛЯ ФОКУСА: ВЫКЛ"
+                text = if (isLoupe10x) "🔍 ЛУПА 10x ДЛЯ ФОКУСА: ВКЛ" else "🔍 ЛУПА 10x ДЛЯ ФОКУСА: ВЫКЛ"
                 setBackgroundColor(if (isLoupe10x) Color.parseColor("#0369A1") else Color.parseColor("#334155"))
                 updatePreviewSession()
             }
@@ -170,7 +211,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(s: SeekBar?, p: Int, f: Boolean) {
                     manualFocusDist = p / 100.0f
-                    tvFocus.text = String.format(Locale.US, "Ручной фокус (Звезды = 0.00..0.15): %.2f", manualFocusDist)
+                    tvFocus.text = String.format(Locale.US, "Ручной фокус: %.2f", manualFocusDist)
                     updatePreviewSession()
                 }
                 override fun onStartTrackingTouch(s: SeekBar?) {}
@@ -197,7 +238,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             })
         }
 
-        // Ряд из двух кнопок: ПРОБНОЕ ФОТО и ПРОПУСТИТЬ
         val actionRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, 16, 0, 0)
@@ -232,7 +272,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         controlsPanel.addView(sbMask)
         controlsPanel.addView(actionRow)
 
-        // Панель живой проявки пробного фото (поверх экрана)
         testPreviewContainer = buildLiveTestEditorOverlay()
         testPreviewContainer.visibility = View.GONE
 
@@ -256,7 +295,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         }
 
         val lblTitle = TextView(this).apply {
-            text = "🎨 ЖИВАЯ ДОКРУТКА ПРОБНОГО ФОТО (Честная темнота)"
+            text = "🎨 ЖИВАЯ ДОКРУТКА ПРОБНОГО ФОТО"
             setTextColor(Color.parseColor("#FACC15"))
             setTypeface(null, Typeface.BOLD)
             setPadding(0, 10, 0, 6)
@@ -281,7 +320,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         }
 
         val tvBlack = TextView(this).apply {
-            text = "Отсечение шума матрицы (Чернота неба): $blackCutValue"
+            text = "Отсечение шума матрицы: $blackCutValue"
             setTextColor(Color.parseColor("#A78BFA"))
         }
         val sbBlack = SeekBar(this).apply {
@@ -290,7 +329,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(s: SeekBar?, p: Int, f: Boolean) {
                     blackCutValue = p
-                    tvBlack.text = "Отсечение шума матрицы (Чернота неба): $p"
+                    tvBlack.text = "Отсечение шума матрицы: $p"
                     refreshLiveTestBitmap()
                 }
                 override fun onStartTrackingTouch(s: SeekBar?) {}
@@ -353,7 +392,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         return box
     }
 
-    // Честная математика проявки пробного фото: на коврике будет ЧЕРНЫЙ экран, а градиент фонаря — плавный!
     private fun refreshLiveTestBitmap() {
         val src = rawTestBitmap ?: return
         val w = src.width
@@ -362,7 +400,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         val pixels = IntArray(w * h)
         src.getPixels(pixels, 0, w, 0, 0, w, h)
 
-        // Считаем средний уровень темнового пола
         var sumLum = 0L
         for (px in pixels) {
             val r = (px shr 16) and 0xFF
@@ -370,7 +407,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             val b = px and 0xFF
             sumLum += minOf(r, g, b)
         }
-        val avgFloor = (sumLum / pixels.size.coerceAtLeast(1)).toFloat() * 0.85f
+        val avgFloor = (sumLum / max(1, pixels.size)).toFloat() * 0.85f
         val totalCut = (avgFloor + blackCutValue).coerceIn(0f, 225f)
         val gainMult = 0.5f + (starGainValue / 100f) * 3.5f
         val maskNorm = (maskHorizonPercent / 100f).coerceIn(0f, 1f)
@@ -379,7 +416,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         val gradEndY = h.toFloat()
 
         for (y in 0 until h) {
-            // Плавный Smoothstep градиент на 78% высоты кадра (никаких резких черно-белых полос!)
             val t = ((y - gradStartY) / (gradEndY - gradStartY)).coerceIn(0f, 1f)
             val smoothT = t * t * (3f - 2f * t)
             val rowAtten = 1.0f - (maskNorm * 0.92f * smoothT)
@@ -406,7 +442,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         ivTestResult.setImageBitmap(out)
     }
 
-    // ================= ЭКРАН 3: НАСТРОЙКИ МАРАФОНА СЪЕМКИ =================
+    // ================= ЭКРАН 3: НАСТРОЙКИ МАРАФОНА =================
     private fun buildScreen3Settings(): View {
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -502,7 +538,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         }
 
         val tvBitrate = TextView(this).apply {
-            text = "Битрейт 4K HEVC видео: $settingBitrate Мбит/с (Без квадратов)"
+            text = "Битрейт 4K HEVC видео: $settingBitrate Мбит/с"
             setTextColor(Color.parseColor("#F87171"))
             setPadding(0, 16, 0, 20)
         }
@@ -511,7 +547,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(s: SeekBar?, p: Int, f: Boolean) {
                     settingBitrate = 50 + p
-                    tvBitrate.text = "Битрейт 4K HEVC видео: $settingBitrate Мбит/с (Без квадратов)"
+                    tvBitrate.text = "Битрейт 4K HEVC видео: $settingBitrate Мбит/с"
                 }
                 override fun onStartTrackingTouch(s: SeekBar?) {}
                 override fun onStopTrackingTouch(s: SeekBar?) {}
@@ -579,7 +615,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 Gravity.BOTTOM
             ).apply { setMargins(40, 40, 40, 50) }
             setOnClickListener {
-                // Мгновенный отклик без зависаний!
                 isEnabled = false
                 text = "⏳ ЗАКРЫТИЕ ЗАТВОРА И СОХРАНЕНИЕ..."
                 val stopIntent = Intent(this@MainActivity, AstroCameraService::class.java).apply {
@@ -603,7 +638,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
     private fun launchAstroMarathon() {
         closePreviewCamera()
-        screenStartTimeMs = System.currentTimeMillis()
         rootFlipper.displayedChild = 3
 
         val intent = Intent(this, AstroCameraService::class.java).apply {
@@ -625,7 +659,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         }
     }
 
-    // ================= КАМЕРА ВИДОИСКАТЕЛЯ И ПРОБНОЕ ФОТО =================
+    // ================= ВИДОИСКАТЕЛЬ =================
     @SuppressWarnings("MissingPermission")
     private fun startPreviewCamera() {
         if (!textureView.isAvailable) {
@@ -683,10 +717,9 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         try {
             val req = cam.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
                 addTarget(previewSurface)
-                // Фиксируем ручную экспозицию в видоискателе, чтобы камера не высветляла темноту в белый шум!
                 set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_OFF)
                 set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_OFF)
-                set(CaptureRequest.SENSOR_EXPOSURE_TIME, 250_000_000L) // 0.25 сек для отзывчивого видоискателя
+                set(CaptureRequest.SENSOR_EXPOSURE_TIME, 250_000_000L)
                 set(CaptureRequest.SENSOR_SENSITIVITY, 1600)
                 set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF)
                 set(CaptureRequest.LENS_FOCUS_DISTANCE, manualFocusDist)
@@ -724,7 +757,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 addTarget(jpegSurface)
                 set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_OFF)
                 set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_OFF)
-                set(CaptureRequest.SENSOR_EXPOSURE_TIME, 1_500_000_000L) // 1.5 сек честной выдержки без авто-высветления!
+                set(CaptureRequest.SENSOR_EXPOSURE_TIME, 1_500_000_000L)
                 set(CaptureRequest.SENSOR_SENSITIVITY, 1600)
                 set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF)
                 set(CaptureRequest.LENS_FOCUS_DISTANCE, manualFocusDist)
@@ -742,7 +775,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         testPhotoReader = null
     }
 
-    // ================= ТЕЛЕМЕТРИЯ И ЗАЩИТА AMOLED =================
+    // ================= ТЕЛЕМЕТРИЯ =================
     private fun startUiTelemetryLoop() {
         val runnable = object : Runnable {
             override fun run() {
@@ -822,7 +855,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
-    // Визуальная сетка и мягкая зона градиента фонаря в видоискателе
     inner class AstroOverlayView(context: Context) : View(context) {
         private val paintLine = Paint().apply {
             color = Color.parseColor("#8038BDF8")
@@ -837,14 +869,12 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             super.onDraw(canvas)
             val w = width.toFloat()
             val h = height.toFloat()
-            // Горизонт
             val cy = h / 2f
             canvas.save()
             canvas.rotate(-rollDeg, w / 2f, cy)
             canvas.drawLine(w * 0.15f, cy, w * 0.85f, cy, paintHorizon)
             canvas.restore()
 
-            // Линия начала плавного градиента фонаря
             val maskY = h * (1f - (maskHorizonPercent / 100f) * 0.75f)
             canvas.drawLine(0f, maskY, w, maskY, paintLine)
         }
